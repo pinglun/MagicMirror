@@ -18,16 +18,23 @@ Module.register("calendar", {
 		displayRepeatingCountTitle: false,
 		defaultRepeatingCountTitle: "",
 		maxTitleLength: 25,
+		wrapEvents: false, // wrap events to multiple lines breaking at maxTitleLength
 		fetchInterval: 5 * 60 * 1000, // Update every 5 minutes.
 		animationSpeed: 2000,
 		fade: true,
 		urgency: 7,
 		timeFormat: "relative",
 		dateFormat: "MMM Do",
+		dateEndFormat: "HH:mm",
+		fullDayEventDateFormat: "MMM Do",
+		showEnd: true,
 		getRelative: 6,
 		fadePoint: 0.25, // Start on 1/4th of the list.
 		hidePrivate: false,
+		hideOngoing: false,
 		colored: false,
+		coloredSymbolOnly: false,
+		tableClass: "small",
 		calendars: [
 			{
 				symbol: "calendar",
@@ -65,7 +72,7 @@ Module.register("calendar", {
 		Log.log("Starting module: " + this.name);
 
 		// Set locale.
-		moment.locale(config.language);
+		moment.updateLocale(config.language, this.getLocaleSpecification(config.timeFormat));
 
 		for (var c in this.config.calendars) {
 			var calendar = this.config.calendars[c];
@@ -77,7 +84,9 @@ Module.register("calendar", {
 			};
 
 			// we check user and password here for backwards compatibility with old configs
-			if(calendar.user && calendar.pass){
+			if(calendar.user && calendar.pass) {
+				Log.warn("Deprecation warning: Please update your calendar authentication configuration.");
+				Log.warn("https://github.com/MichMich/MagicMirror/tree/v2.1.2/modules/default/calendar#calendar-authentication-options");
 				calendar.auth = {
 					user: calendar.user,
 					pass: calendar.pass
@@ -118,33 +127,39 @@ Module.register("calendar", {
 
 		var events = this.createEventList();
 		var wrapper = document.createElement("table");
-		wrapper.className = "small";
+		wrapper.className = this.config.tableClass;
 
 		if (events.length === 0) {
 			wrapper.innerHTML = (this.loaded) ? this.translate("EMPTY") : this.translate("LOADING");
-			wrapper.className = "small dimmed";
+			wrapper.className = this.config.tableClass + " dimmed";
 			return wrapper;
 		}
 
+		var lastSeenDate = "";
+
 		for (var e in events) {
 			var event = events[e];
+			var dateAsString = moment(event.startDate, "x").format(this.config.dateFormat);
+			if(this.config.timeFormat === "dateheaders"){
+				if(lastSeenDate !== dateAsString){
+					var dateRow = document.createElement("tr");
+					dateRow.className = "normal"
+					var dateCell = document.createElement("td");
 
-			var excluded = false;
-			for (var f in this.config.excludedEvents) {
-				var filter = this.config.excludedEvents[f];
-				if (event.title.toLowerCase().includes(filter.toLowerCase())) {
-					excluded = true;
-					break;
+					dateCell.colSpan = "3";
+					dateCell.innerHTML = dateAsString;
+					dateRow.appendChild(dateCell);
+					wrapper.appendChild(dateRow);
+
+
+					lastSeenDate = dateAsString;
 				}
 			}
 
-			if (excluded) {
-				continue;
-			}
 
 			var eventWrapper = document.createElement("tr");
 
-			if (this.config.colored) {
+			if (this.config.colored && !this.config.coloredSymbolOnly) {
 				eventWrapper.style.cssText = "color:" + this.colorForUrl(event.url);
 			}
 
@@ -152,6 +167,11 @@ Module.register("calendar", {
 
 			if (this.config.displaySymbol) {
 				var symbolWrapper = document.createElement("td");
+
+				if (this.config.colored && this.config.coloredSymbolOnly) {
+					symbolWrapper.style.cssText = "color:" + this.colorForUrl(event.url);
+				}
+
 				symbolWrapper.className = "symbol align-right";
 				var symbols = this.symbolsForUrl(event.url);
 				if(typeof symbols === "string") {
@@ -160,18 +180,21 @@ Module.register("calendar", {
 
 				for(var i = 0; i < symbols.length; i++) {
 					var symbol = document.createElement("span");
-					symbol.className = "fa fa-" + symbols[i];
+					symbol.className = "fa fa-fw fa-" + symbols[i];
 					if(i > 0){
 						symbol.style.paddingLeft = "5px";
 					}
 					symbolWrapper.appendChild(symbol);
 				}
 				eventWrapper.appendChild(symbolWrapper);
+			}else if(this.config.timeFormat === "dateheaders"){
+				var blankCell = document.createElement("td");
+				blankCell.innerHTML = "&nbsp;&nbsp;&nbsp;"
+				eventWrapper.appendChild(blankCell);
 			}
 
 			var titleWrapper = document.createElement("td"),
 				repeatingCountTitle = "";
-
 
 			if (this.config.displayRepeatingCountTitle) {
 
@@ -193,84 +216,136 @@ Module.register("calendar", {
 				titleWrapper.className = "title";
 			}
 
-			eventWrapper.appendChild(titleWrapper);
+			if(this.config.timeFormat === "dateheaders"){
 
-			var timeWrapper = document.createElement("td");
-			//console.log(event.today);
-			var now = new Date();
-			// Define second, minute, hour, and day variables
-			var oneSecond = 1000; // 1,000 milliseconds
-			var oneMinute = oneSecond * 60;
-			var oneHour = oneMinute * 60;
-			var oneDay = oneHour * 24;
-			if (event.fullDayEvent) {
-				if (event.today) {
-					timeWrapper.innerHTML = this.capFirst(this.translate("TODAY"));
-				} else if (event.startDate - now < oneDay && event.startDate - now > 0) {
-					timeWrapper.innerHTML = this.capFirst(this.translate("TOMORROW"));
-				} else if (event.startDate - now < 2 * oneDay && event.startDate - now > 0) {
-					if (this.translate("DAYAFTERTOMORROW") !== "DAYAFTERTOMORROW") {
-						timeWrapper.innerHTML = this.capFirst(this.translate("DAYAFTERTOMORROW"));
-					} else {
-						timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
+				if (event.fullDayEvent) {
+					titleWrapper.colSpan = "2";
+					titleWrapper.align = "left";
+
+				}else{
+					var timeWrapper = document.createElement("td");
+					timeWrapper.className = "time light";
+					timeWrapper.align = "left";
+					timeWrapper.style.paddingLeft = "2px";
+					var timeFormatString = "";
+					switch (config.timeFormat) {
+					case 12: {
+						timeFormatString = "h:mm A";
+						break;
 					}
-				} else {
-					/* Check to see if the user displays absolute or relative dates with their events
-					 * Also check to see if an event is happening within an 'urgency' time frameElement
-					 * For example, if the user set an .urgency of 7 days, those events that fall within that
-					 * time frame will be displayed with 'in xxx' time format or moment.fromNow()
-					 *
-					 * Note: this needs to be put in its own function, as the whole thing repeats again verbatim
-					 */
-					if (this.config.timeFormat === "absolute") {
-						if ((this.config.urgency > 1) && (event.startDate - now < (this.config.urgency * oneDay))) {
-							// This event falls within the config.urgency period that the user has set
-							timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
-						} else {
-							timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").format(this.config.dateFormat));
-						}
-					} else {
-						timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
+					case 24: {
+						timeFormatString = "HH:mm";
+						break;
 					}
+					default: {
+						timeFormatString = "HH:mm";
+						break;
+					}
+					}
+					timeWrapper.innerHTML = moment(event.startDate, "x").format(timeFormatString);
+					eventWrapper.appendChild(timeWrapper);
+					titleWrapper.align = "right";
 				}
-			} else {
-				if (event.startDate >= new Date()) {
-					if (event.startDate - now < 2 * oneDay) {
-						// This event is within the next 48 hours (2 days)
-						if (event.startDate - now < this.config.getRelative * oneHour) {
-							// If event is within 6 hour, display 'in xxx' time format or moment.fromNow()
-							timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
+
+				eventWrapper.appendChild(titleWrapper);
+			}else{
+				var timeWrapper = document.createElement("td");
+
+				eventWrapper.appendChild(titleWrapper);
+				//console.log(event.today);
+				var now = new Date();
+				// Define second, minute, hour, and day variables
+				var oneSecond = 1000; // 1,000 milliseconds
+				var oneMinute = oneSecond * 60;
+				var oneHour = oneMinute * 60;
+				var oneDay = oneHour * 24;
+				if (event.fullDayEvent) {
+					if (event.today) {
+						timeWrapper.innerHTML = this.capFirst(this.translate("TODAY"));
+					} else if (event.startDate - now < oneDay && event.startDate - now > 0) {
+						timeWrapper.innerHTML = this.capFirst(this.translate("TOMORROW"));
+					} else if (event.startDate - now < 2 * oneDay && event.startDate - now > 0) {
+						if (this.translate("DAYAFTERTOMORROW") !== "DAYAFTERTOMORROW") {
+							timeWrapper.innerHTML = this.capFirst(this.translate("DAYAFTERTOMORROW"));
 						} else {
-							// Otherwise just say 'Today/Tomorrow at such-n-such time'
-							timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").calendar());
+							timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
 						}
 					} else {
 						/* Check to see if the user displays absolute or relative dates with their events
-						 * Also check to see if an event is happening within an 'urgency' time frameElement
-						 * For example, if the user set an .urgency of 7 days, those events that fall within that
-						 * time frame will be displayed with 'in xxx' time format or moment.fromNow()
-						 *
-						 * Note: this needs to be put in its own function, as the whole thing repeats again verbatim
-						 */
+						* Also check to see if an event is happening within an 'urgency' time frameElement
+						* For example, if the user set an .urgency of 7 days, those events that fall within that
+						* time frame will be displayed with 'in xxx' time format or moment.fromNow()
+						*
+						* Note: this needs to be put in its own function, as the whole thing repeats again verbatim
+						*/
 						if (this.config.timeFormat === "absolute") {
 							if ((this.config.urgency > 1) && (event.startDate - now < (this.config.urgency * oneDay))) {
 								// This event falls within the config.urgency period that the user has set
 								timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
 							} else {
-								timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").format(this.config.dateFormat));
+								timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").format(this.config.fullDayEventDateFormat));
 							}
 						} else {
 							timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
 						}
 					}
+					if(this.config.showEnd){
+						timeWrapper.innerHTML += "-" ;
+						timeWrapper.innerHTML += this.capFirst(moment(event.endDate  , "x").format(this.config.fullDayEventDateFormat));
+					}
 				} else {
-					timeWrapper.innerHTML = this.capFirst(this.translate("RUNNING")) + " " + moment(event.endDate, "x").fromNow(true);
+					if (event.startDate >= new Date()) {
+						if (event.startDate - now < 2 * oneDay) {
+							// This event is within the next 48 hours (2 days)
+							if (event.startDate - now < this.config.getRelative * oneHour) {
+								// If event is within 6 hour, display 'in xxx' time format or moment.fromNow()
+								timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
+							} else {
+								if(this.config.timeFormat === "absolute") {
+									timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").format(this.config.dateFormat));
+								} else {
+									// Otherwise just say 'Today/Tomorrow at such-n-such time'
+									timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").calendar());
+								}
+							}
+						} else {
+							/* Check to see if the user displays absolute or relative dates with their events
+							* Also check to see if an event is happening within an 'urgency' time frameElement
+							* For example, if the user set an .urgency of 7 days, those events that fall within that
+							* time frame will be displayed with 'in xxx' time format or moment.fromNow()
+							*
+							* Note: this needs to be put in its own function, as the whole thing repeats again verbatim
+							*/
+							if (this.config.timeFormat === "absolute") {
+								if ((this.config.urgency > 1) && (event.startDate - now < (this.config.urgency * oneDay))) {
+									// This event falls within the config.urgency period that the user has set
+									timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
+								} else {
+									timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").format(this.config.dateFormat));
+								}
+							} else {
+								timeWrapper.innerHTML = this.capFirst(moment(event.startDate, "x").fromNow());
+							}
+						}
+					} else {
+						timeWrapper.innerHTML = this.capFirst(
+							this.translate("RUNNING", {
+								fallback: this.translate("RUNNING") + " {timeUntilEnd}",
+								timeUntilEnd: moment(event.endDate, "x").fromNow(true)
+							})
+						);
+					}
+					if (this.config.showEnd) {
+						timeWrapper.innerHTML += "-";
+						timeWrapper.innerHTML += this.capFirst(moment(event.endDate, "x").format(this.config.dateEndFormat));
+
+					}
 				}
+				//timeWrapper.innerHTML += ' - '+ moment(event.startDate,'x').format('lll');
+				//console.log(event);
+				timeWrapper.className = "time light";
+				eventWrapper.appendChild(timeWrapper);
 			}
-			//timeWrapper.innerHTML += ' - '+ moment(event.startDate,'x').format('lll');
-			//console.log(event);
-			timeWrapper.className = "time light";
-			eventWrapper.appendChild(timeWrapper);
 
 			wrapper.appendChild(eventWrapper);
 
@@ -289,6 +364,31 @@ Module.register("calendar", {
 		}
 
 		return wrapper;
+	},
+
+	/**
+	 * This function accepts a number (either 12 or 24) and returns a moment.js LocaleSpecification with the
+	 * corresponding timeformat to be used in the calendar display. If no number is given (or otherwise invalid input)
+	 * it will a localeSpecification object with the system locale time format.
+	 *
+	 * @param {number} timeFormat Specifies either 12 or 24 hour time format
+	 * @returns {moment.LocaleSpecification}
+	 */
+	getLocaleSpecification: function(timeFormat) {
+		switch (timeFormat) {
+		case 12: {
+			return { longDateFormat: {LT: "h:mm A"} };
+			break;
+		}
+		case 24: {
+			return { longDateFormat: {LT: "HH:mm"} };
+			break;
+		}
+		default: {
+			return { longDateFormat: {LT: moment.localeData().longDateFormat("LT")} };
+			break;
+		}
+		}
 	},
 
 	/* hasCalendarURL(url)
@@ -317,6 +417,7 @@ Module.register("calendar", {
 	createEventList: function () {
 		var events = [];
 		var today = moment().startOf("day");
+		var now = new Date();
 		for (var c in this.calendarData) {
 			var calendar = this.calendarData[c];
 			for (var e in calendar) {
@@ -326,6 +427,14 @@ Module.register("calendar", {
 						  // do not add the current event, skip it
 						  continue;
 					}
+				}
+				if(this.config.hideOngoing) {
+					if(event.startDate < now) {
+						continue;
+					}
+				}
+				if(this.listContainsEvent(events,event)){
+					continue;
 				}
 				event.url = c;
 				event.today = event.startDate >= today && event.startDate < (today + 24 * 60 * 60 * 1000);
@@ -340,6 +449,17 @@ Module.register("calendar", {
 		return events.slice(0, this.config.maximumEntries);
 	},
 
+
+	listContainsEvent: function(eventList, event){
+		for(var evt of eventList){
+			if(evt.title === event.title && parseInt(evt.startDate) === parseInt(event.startDate)){
+				return true;
+			}
+		}
+		return false;
+
+	},
+
 	/* createEventList(url)
 	 * Requests node helper to add calendar url.
 	 *
@@ -348,6 +468,7 @@ Module.register("calendar", {
 	addCalendar: function (url, auth, calendarConfig) {
 		this.sendSocketNotification("ADD_CALENDAR", {
 			url: url,
+			excludedEvents: calendarConfig.excludedEvents || this.config.excludedEvents,
 			maximumEntries: calendarConfig.maximumEntries || this.config.maximumEntries,
 			maximumNumberOfDays: calendarConfig.maximumNumberOfDays || this.config.maximumNumberOfDays,
 			fetchInterval: this.config.fetchInterval,
@@ -408,21 +529,46 @@ Module.register("calendar", {
 		return defaultValue;
 	},
 
-	/* shorten(string, maxLength)
-	 * Shortens a string if it's longer than maxLength.
-	 * Adds an ellipsis to the end.
+	/**
+	 * Shortens a string if it's longer than maxLength and add a ellipsis to the end
 	 *
-	 * argument string string - The string to shorten.
-	 * argument maxLength number - The max length of the string.
-	 *
-	 * return string - The shortened string.
+	 * @param {string} string Text string to shorten
+	 * @param {number} maxLength The max length of the string
+	 * @param {boolean} wrapEvents Wrap the text after the line has reached maxLength
+	 * @returns {string} The shortened string
 	 */
-	shorten: function (string, maxLength) {
-		if (string.length > maxLength) {
-			return string.slice(0, maxLength) + "&hellip;";
+	shorten: function (string, maxLength, wrapEvents) {
+		if (typeof string !== "string") {
+			return "";
 		}
 
-		return string;
+		if (wrapEvents === true) {
+			var temp = "";
+			var currentLine = "";
+			var words = string.split(" ");
+
+			for (var i = 0; i < words.length; i++) {
+				var word = words[i];
+				if (currentLine.length + word.length < (typeof maxLength === "number" ? maxLength : 25) - 1) { // max - 1 to account for a space
+					currentLine += (word + " ");
+				} else {
+					if (currentLine.length > 0) {
+						temp += (currentLine + "<br>" + word + " ");
+					} else {
+						temp += (word + "<br>");
+					}
+					currentLine = "";
+				}
+			}
+
+			return (temp + currentLine).trim();
+		} else {
+			if (maxLength && typeof maxLength === "number" && string.length > maxLength) {
+				return string.trim().slice(0, maxLength) + "&hellip;";
+			} else {
+				return string.trim();
+			}
+		}
 	},
 
 	/* capFirst(string)
@@ -437,7 +583,7 @@ Module.register("calendar", {
 	/* titleTransform(title)
 	 * Transforms the title of an event for usage.
 	 * Replaces parts of the text as defined in config.titleReplace.
-	 * Shortens title based on config.maxTitleLength
+	 * Shortens title based on config.maxTitleLength and config.wrapEvents
 	 *
 	 * argument title string - The title to transform.
 	 *
@@ -456,7 +602,7 @@ Module.register("calendar", {
 			title = title.replace(needle, replacement);
 		}
 
-		title = this.shorten(title, this.config.maxTitleLength);
+		title = this.shorten(title, this.config.maxTitleLength, this.config.wrapEvents);
 		return title;
 	},
 
@@ -466,10 +612,12 @@ Module.register("calendar", {
 	 */
 	broadcastEvents: function () {
 		var eventList = [];
-		for (url in this.calendarData) {
+		for (var url in this.calendarData) {
 			var calendar = this.calendarData[url];
-			for (e in calendar) {
+			for (var e in calendar) {
 				var event = cloneObject(calendar[e]);
+				event.symbol = this.symbolsForUrl(url);
+				event.color = this.colorForUrl(url);
 				delete event.url;
 				eventList.push(event);
 			}
